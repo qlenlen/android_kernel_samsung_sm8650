@@ -25,6 +25,10 @@
 #include "blk-rq-qos.h"
 #include "blk-cgroup.h"
 
+#ifdef CONFIG_DDAR
+extern int fscrypt_dd_encrypted(struct bio *bio);
+#endif
+
 struct bio_alloc_cache {
 	struct bio		*free_list;
 	unsigned int		nr;
@@ -850,7 +854,7 @@ static inline bool bio_full(struct bio *bio, unsigned len)
 {
 	if (bio->bi_vcnt >= bio->bi_max_vecs)
 		return true;
-	if (bio->bi_iter.bi_size > UINT_MAX - len)
+	if (bio->bi_iter.bi_size > BIO_MAX_BYTES - len)
 		return true;
 	return false;
 }
@@ -902,7 +906,12 @@ static bool __bio_try_merge_page(struct bio *bio, struct page *page,
 		struct bio_vec *bv = &bio->bi_io_vec[bio->bi_vcnt - 1];
 
 		if (page_is_mergeable(bv, page, len, off, same_page)) {
-			if (bio->bi_iter.bi_size > UINT_MAX - len) {
+#ifdef CONFIG_DDAR
+			if ((*same_page == false) && fscrypt_dd_encrypted(bio)) {
+				return false;
+			}
+#endif
+			if (bio->bi_iter.bi_size > BIO_MAX_BYTES - len) {
 				*same_page = false;
 				return false;
 			}
@@ -1220,7 +1229,7 @@ static int __bio_iov_iter_get_pages(struct bio *bio, struct iov_iter *iter)
 	 * result to ensure the bio's total size is correct. The remainder of
 	 * the iov data will be picked up in the next bio iteration.
 	 */
-	size = iov_iter_get_pages2(iter, pages, UINT_MAX - bio->bi_iter.bi_size,
+	size = iov_iter_get_pages2(iter, pages, BIO_MAX_BYTES - bio->bi_iter.bi_size,
 				  nr_pages, &offset);
 	if (unlikely(size <= 0))
 		return size ? size : -EFAULT;
