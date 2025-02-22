@@ -946,6 +946,7 @@ static inline pte_t ptep_get_and_clear(struct mm_struct *mm,
 	pte_t pte;
 
 	arm64_update_cacheable_aliases(ptep, __pte(0));
+	READ_ONCE(*ptep);
 	pte = __pte(xchg_relaxed(&pte_val(*ptep), 0));
 
 	page_table_check_pte_clear(mm, address, pte);

@@ -299,6 +299,8 @@ void arm64_notify_die(const char *str, struct pt_regs *regs,
 
 		arm64_force_sig_fault(signo, sicode, far, str);
 	} else {
+		/* FIXME: propagate fault address handlers using orig_x0 */
+		regs->orig_x0 = far;
 		die(str, regs, err);
 	}
 }
