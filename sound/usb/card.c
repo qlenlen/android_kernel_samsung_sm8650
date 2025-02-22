@@ -828,6 +828,7 @@ static int usb_audio_probe(struct usb_interface *intf,
 	int ifnum;
 	u32 id;
 
+	pr_info("%s : audio probe start!\n",__func__);
 	alts = &intf->altsetting[0];
 	ifnum = get_iface_desc(alts)->bInterfaceNumber;
 	id = USB_ID(le16_to_cpu(dev->descriptor.idVendor),
@@ -949,6 +950,7 @@ static int usb_audio_probe(struct usb_interface *intf,
 	err = try_to_register_card(chip, ifnum);
 	if (err < 0)
 		goto __error_no_register;
+	pr_info("%s : card %d is registered.\n", __func__, chip->card->number);
 
 	if (chip->quirk_flags & QUIRK_FLAG_SHARE_MEDIA_DEVICE) {
 		/* don't want to fail when snd_media_device_create() fails */
