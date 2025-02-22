@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-2.0
+﻿// SPDX-License-Identifier: GPL-2.0
 /*
  * INET		An implementation of the TCP/IP protocol suite for the LINUX
  *		operating system.  INET is implemented using the  BSD Socket
@@ -80,6 +80,9 @@
 #include <linux/jump_label_ratelimit.h>
 #include <net/busy_poll.h>
 #include <net/mptcp.h>
+#if IS_ENABLED(CONFIG_SKB_TRACER)
+#include <net/skb_tracer.h>
+#endif
 
 int sysctl_tcp_max_orphans __read_mostly = NR_FILE;
 
@@ -5185,6 +5188,9 @@ void tcp_rbtree_insert(struct rb_root *root, struct sk_buff *skb)
 	}
 	rb_link_node(&skb->rbnode, parent, p);
 	rb_insert_color(&skb->rbnode, root);
+#if IS_ENABLED(CONFIG_SKB_TRACER)
+	skb_tracer_mask_with(skb, root);
+#endif
 }
 
 /* Collapse contiguous sequence of skbs head..tail with
@@ -6574,7 +6580,9 @@ int tcp_rcv_state_process(struct sock *sk, struct sk_buff *skb)
 		smp_mb();
 		tcp_set_state(sk, TCP_ESTABLISHED);
 		sk->sk_state_change(sk);
-
+#if IS_ENABLED(CONFIG_SKB_TRACER)
+		skb_tracer_init(sk);
+#endif
 		/* Note, that this wakeup is only for marginal crossed SYN case.
 		 * Passively open sockets are not waked up, because
 		 * sk->sk_sleep == NULL and sk->sk_socket == NULL.

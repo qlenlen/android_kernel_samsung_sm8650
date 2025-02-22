@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
+﻿// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  *	Routines having to do with the 'struct sk_buff' memory handlers.
  *
@@ -72,6 +72,9 @@
 #include <net/mptcp.h>
 #include <net/mctp.h>
 #include <net/page_pool.h>
+#if IS_ENABLED(CONFIG_SKB_TRACER)
+#include <net/skb_tracer.h>
+#endif
 
 #include <linux/uaccess.h>
 #include <trace/events/skb.h>
@@ -846,6 +849,10 @@ void skb_release_head_state(struct sk_buff *skb)
 	nf_conntrack_put(skb_nfct(skb));
 #endif
 	skb_ext_put(skb);
+	
+#if IS_ENABLED(CONFIG_SKB_TRACER)
+	skb_tracer_put(skb);
+#endif
 }
 
 /* Free everything but the sk_buff shell. */
@@ -1082,6 +1089,9 @@ void napi_skb_free_stolen_head(struct sk_buff *skb)
 		nf_reset_ct(skb);
 		skb_dst_drop(skb);
 		skb_ext_put(skb);
+#if IS_ENABLED(CONFIG_SKB_TRACER)
+		skb_tracer_put(skb);
+#endif
 		skb_orphan(skb);
 		skb->slow_gro = 0;
 	}
@@ -1128,6 +1138,9 @@ static void __copy_skb_header(struct sk_buff *new, const struct sk_buff *old)
 	memcpy(new->cb, old->cb, sizeof(old->cb));
 	skb_dst_copy(new, old);
 	__skb_ext_copy(new, old);
+#if IS_ENABLED(CONFIG_SKB_TRACER)
+	skb_tracer_get((struct sk_buff *)old);
+#endif
 	__nf_copy(new, old, false);
 
 	/* Note : this field could be in the headers group.

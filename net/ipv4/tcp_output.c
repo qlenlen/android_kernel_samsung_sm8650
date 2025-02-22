@@ -39,6 +39,9 @@
 
 #include <net/tcp.h>
 #include <net/mptcp.h>
+#if IS_ENABLED(CONFIG_SKB_TRACER)
+#include <net/skb_tracer.h>
+#endif
 
 #include <linux/compiler.h>
 #include <linux/gfp.h>
@@ -71,6 +74,9 @@ static void tcp_event_new_data_sent(struct sock *sk, struct sk_buff *skb)
 	WRITE_ONCE(tp->snd_nxt, TCP_SKB_CB(skb)->end_seq);
 
 	__skb_unlink(skb, &sk->sk_write_queue);
+#if IS_ENABLED(CONFIG_SKB_TRACER)
+	skb_tracer_unmask_with(skb, &sk->sk_write_queue);
+#endif
 	tcp_rbtree_insert(&sk->tcp_rtx_queue, skb);
 
 	if (tp->highest_sack == NULL)
@@ -1416,6 +1422,10 @@ static int __tcp_transmit_skb(struct sock *sk, struct sk_buff *skb,
 static int tcp_transmit_skb(struct sock *sk, struct sk_buff *skb, int clone_it,
 			    gfp_t gfp_mask)
 {
+#if IS_ENABLED(CONFIG_SKB_TRACER)
+	skb_tracer_func_trace(sk, skb, STL_TCP_TRANSMIT_SKB);
+#endif
+
 	return __tcp_transmit_skb(sk, skb, clone_it, gfp_mask,
 				  tcp_sk(sk)->rcv_nxt);
 }
@@ -1515,8 +1525,12 @@ static void tcp_insert_write_queue_after(struct sk_buff *skb,
 					 struct sock *sk,
 					 enum tcp_queue tcp_queue)
 {
-	if (tcp_queue == TCP_FRAG_IN_WRITE_QUEUE)
+	if (tcp_queue == TCP_FRAG_IN_WRITE_QUEUE) {
 		__skb_queue_after(&sk->sk_write_queue, skb, buff);
+#if IS_ENABLED(CONFIG_SKB_TRACER)
+		skb_tracer_mask_with(buff, &sk->sk_write_queue);
+#endif
+	}
 	else
 		tcp_rbtree_insert(&sk->tcp_rtx_queue, buff);
 }
@@ -2639,6 +2653,10 @@ static bool tcp_write_xmit(struct sock *sk, unsigned int mss_now, int nonagle,
 	max_segs = tcp_tso_segs(sk, mss_now);
 	while ((skb = tcp_send_head(sk))) {
 		unsigned int limit;
+
+#if IS_ENABLED(CONFIG_SKB_TRACER)
+		skb_tracer_func_trace(sk, skb, STL_TCP_WRITE_XMIT);
+#endif
 
 		if (unlikely(tp->repair) && tp->repair_queue == TCP_SEND_QUEUE) {
 			/* "skb_mstamp_ns" is used as a start point for the retransmit timer */
@@ -3837,6 +3855,9 @@ static int tcp_send_syn_data(struct sock *sk, struct sk_buff *syn)
 
 	/* data was not sent, put it in write_queue */
 	__skb_queue_tail(&sk->sk_write_queue, syn_data);
+#if IS_ENABLED(CONFIG_SKB_TRACER)
+	skb_tracer_mask_with(syn_data, &sk->sk_write_queue);
+#endif
 	tp->packets_out -= tcp_skb_pcount(syn_data);
 
 fallback:
@@ -3880,6 +3901,9 @@ int tcp_connect(struct sock *sk)
 	tcp_connect_queue_skb(sk, buff);
 	tcp_ecn_send_syn(sk, buff);
 	tcp_rbtree_insert(&sk->tcp_rtx_queue, buff);
+#if IS_ENABLED(CONFIG_SKB_TRACER)
+	skb_tracer_init(sk);
+#endif
 
 	/* Send off SYN; include data in Fast Open. */
 	err = tp->fastopen_req ? tcp_send_syn_data(sk, buff) :

@@ -71,8 +71,7 @@
 #include <net/netlink.h>
 #define CREATE_TRACE_POINTS
 #include <trace/events/netlink.h>
-#undef CREATE_TRACE_POINTS
-#include <trace/hooks/net.h>
+
 #include "af_netlink.h"
 
 struct listeners {
@@ -1967,12 +1966,18 @@ out:
 	return err ? : copied;
 }
 
-static __poll_t netlink_poll(struct file *file, struct socket *sock,
-			     poll_table *wait)
+__poll_t netlink_poll(struct file *file, struct socket *sock, poll_table *wait)
 {
 	__poll_t mask = datagram_poll(file, sock, wait);
+	struct sock *sk = sock->sk;
+	struct netlink_sock *nlk = nlk_sk(sk);
 
-	trace_android_vh_netlink_poll(file, sock, wait, &mask);
+	if (test_bit(NETLINK_S_CONGESTED, &nlk->state)
+		&& skb_queue_empty_lockless(&sk->sk_receive_queue)) {
+		mask |= EPOLLIN | EPOLLRDNORM;
+
+		pr_info("%s: \n", __func__);
+	}
 	return mask;
 }
 
