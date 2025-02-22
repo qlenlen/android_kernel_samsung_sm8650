@@ -40,6 +40,9 @@
 #include <net/inet_ecn.h>
 #include <net/dst.h>
 #include <net/mptcp.h>
+#if IS_ENABLED(CONFIG_SKB_TRACER)
+#include <net/skb_tracer.h>
+#endif
 
 #include <linux/seq_file.h>
 #include <linux/memcontrol.h>
@@ -1924,6 +1927,9 @@ static inline bool tcp_rtx_and_write_queues_empty(const struct sock *sk)
 static inline void tcp_add_write_queue_tail(struct sock *sk, struct sk_buff *skb)
 {
 	__skb_queue_tail(&sk->sk_write_queue, skb);
+#if IS_ENABLED(CONFIG_SKB_TRACER)
+	skb_tracer_mask_with(skb, &sk->sk_write_queue);
+#endif
 
 	/* Queue it, remembering where we must start sending. */
 	if (sk->sk_write_queue.next == skb)
@@ -1936,12 +1942,19 @@ static inline void tcp_insert_write_queue_before(struct sk_buff *new,
 						  struct sock *sk)
 {
 	__skb_queue_before(&sk->sk_write_queue, skb, new);
+#if IS_ENABLED(CONFIG_SKB_TRACER)
+	skb_tracer_mask_with(new, &sk->sk_write_queue);
+#endif
 }
 
 static inline void tcp_unlink_write_queue(struct sk_buff *skb, struct sock *sk)
 {
 	tcp_skb_tsorted_anchor_cleanup(skb);
 	__skb_unlink(skb, &sk->sk_write_queue);
+#if IS_ENABLED(CONFIG_SKB_TRACER)
+	skb_tracer_unmask_with(skb, &sk->sk_write_queue);
+#endif
+
 }
 
 void tcp_rbtree_insert(struct rb_root *root, struct sk_buff *skb);
@@ -1950,6 +1963,9 @@ static inline void tcp_rtx_queue_unlink(struct sk_buff *skb, struct sock *sk)
 {
 	tcp_skb_tsorted_anchor_cleanup(skb);
 	rb_erase(&skb->rbnode, &sk->tcp_rtx_queue);
+#if IS_ENABLED(CONFIG_SKB_TRACER)
+	skb_tracer_unmask_with(skb, &sk->tcp_rtx_queue);
+#endif
 }
 
 static inline void tcp_rtx_queue_unlink_and_free(struct sk_buff *skb, struct sock *sk)

@@ -696,11 +696,13 @@ static bool __is_vma_write_locked(struct vm_area_struct *vma, int *mm_lock_seq)
 static inline void vma_start_write(struct vm_area_struct *vma)
 {
 	int mm_lock_seq;
+	struct rw_semaphore *lock;
 
 	if (__is_vma_write_locked(vma, &mm_lock_seq))
 		return;
 
-	down_write(&vma->vm_lock->lock);
+	lock = &vma->vm_lock->lock;
+	down_write(lock);
 	/*
 	 * We should use WRITE_ONCE() here because we can have concurrent reads
 	 * from the early lockless pessimistic check in vma_start_read().
@@ -708,7 +710,7 @@ static inline void vma_start_write(struct vm_area_struct *vma)
 	 * we should use WRITE_ONCE() for cleanliness and to keep KCSAN happy.
 	 */
 	WRITE_ONCE(vma->vm_lock_seq, mm_lock_seq);
-	up_write(&vma->vm_lock->lock);
+	up_write(lock);
 }
 
 static inline bool vma_try_start_write(struct vm_area_struct *vma)
@@ -779,6 +781,11 @@ static inline void vma_assert_write_locked(struct vm_area_struct *vma)
 		{ mmap_assert_write_locked(vma->vm_mm); }
 static inline void vma_mark_detached(struct vm_area_struct *vma,
 				     bool detached) {}
+
+static inline void vma_assert_locked(struct vm_area_struct *vma)
+{
+	mmap_assert_locked(vma->vm_mm);
+}
 
 static inline void release_fault_lock(struct vm_fault *vmf)
 {
@@ -3082,6 +3089,8 @@ extern vm_fault_t filemap_map_pages(struct vm_fault *vmf,
 		pgoff_t start_pgoff, pgoff_t end_pgoff);
 extern vm_fault_t filemap_page_mkwrite(struct vm_fault *vmf);
 
+extern unsigned int mmap_readaround_limit;
+
 extern unsigned long stack_guard_gap;
 /* Generic expand stack which grows the stack according to GROWS{UP,DOWN} */
 int expand_stack_locked(struct vm_area_struct *vma, unsigned long address);
@@ -3709,6 +3718,32 @@ void __init setup_nr_node_ids(void);
 static inline void setup_nr_node_ids(void) {}
 #endif
 
+struct seq_file;
+void seq_printf(struct seq_file *m, const char *f, ...);
+
+static inline void show_val_meminfo(struct seq_file *m,
+				    const char *str, long size)
+{
+	char name[17];
+	int len = strlen(str);
+
+	if (len <= 15) {
+		sprintf(name, "%s:", str);
+	} else {
+		strncpy(name, str, 15);
+		name[15] = ':';
+		name[16] = '\0';
+	}
+
+	seq_printf(m, "%-16s%8ld kB\n", name, size);
+}
+
+extern inline bool need_memory_boosting(void);
+
+#ifdef CONFIG_RBIN
+extern unsigned long rbin_total;
+#endif
+
 extern int memcmp_pages(struct page *page1, struct page *page2);
 
 static inline int pages_identical(struct page *page1, struct page *page2)
@@ -3781,4 +3816,54 @@ madvise_set_anon_name(struct mm_struct *mm, unsigned long start,
 }
 #endif
 
+extern phys_addr_t memmapsize;
+extern unsigned long physpages, codesize, datasize, rosize, bss_size;
+extern unsigned long init_code_size, init_data_size;
+
+#define GPU_PAGE_MAGIC (0x9A0E06B9A0E)
+
+static inline bool is_gpu_folio(struct folio *folio)
+{
+	return (folio->mapping
+		&& !((unsigned long)folio->mapping & PAGE_MAPPING_ANON)
+		&& (folio->mapping->private_data == (void *)GPU_PAGE_MAGIC));
+}
+
+static inline bool is_gpu_mapping(struct address_space *mapping)
+{
+	return (mapping && !((unsigned long)mapping & PAGE_MAPPING_ANON)
+			&& (mapping->private_data == (void *)GPU_PAGE_MAGIC));
+}
+
+extern atomic_long_t nr_gpage_shmem;
+
+static inline unsigned long gpu_page_shmem_pages(void)
+{
+	long x = atomic_long_read(&nr_gpage_shmem);
+
+	if (x < 0)
+		x = 0;
+	return x;
+}
+
+static inline void gpu_page_mod_shmem(long count)
+{
+	atomic_long_add(count, &nr_gpage_shmem);
+}
+
+extern atomic_long_t nr_gpage_reclaimed;
+
+static inline unsigned long gpu_page_reclaimed_pages(void)
+{
+	long x = atomic_long_read(&nr_gpage_reclaimed);
+
+	if (x < 0)
+		x = 0;
+	return x;
+}
+
+static inline void gpu_page_mod_reclaimed(long count)
+{
+	atomic_long_add(count, &nr_gpage_reclaimed);
+}
 #endif /* _LINUX_MM_H */
