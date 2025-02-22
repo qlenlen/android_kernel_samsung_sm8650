@@ -48,6 +48,16 @@ static void page_array_free(struct inode *inode, void *pages, int nr)
 		kfree(pages);
 }
 
+void *f2fs_page_array_alloc(struct inode *inode, int nr)
+{
+	return page_array_alloc(inode, nr);
+}
+
+void f2fs_page_array_free(struct inode *inode, void *pages, int nr)
+{
+	page_array_free(inode, pages, nr);
+}
+
 struct f2fs_compress_ops {
 	int (*init_compress_ctx)(struct compress_ctx *cc);
 	void (*destroy_compress_ctx)(struct compress_ctx *cc);
@@ -871,14 +881,15 @@ static bool cluster_has_invalid_data(struct compress_ctx *cc)
 
 bool f2fs_sanity_check_cluster(struct dnode_of_data *dn)
 {
+#ifdef CONFIG_F2FS_CHECK_FS
 	struct f2fs_sb_info *sbi = F2FS_I_SB(dn->inode);
 	unsigned int cluster_size = F2FS_I(dn->inode)->i_cluster_size;
-	bool compressed = dn->data_blkaddr == COMPRESS_ADDR;
 	int cluster_end = 0;
+	unsigned int count;
 	int i;
 	char *reason = "";
 
-	if (!compressed)
+	if (dn->data_blkaddr != COMPRESS_ADDR)
 		return false;
 
 	/* [..., COMPR_ADDR, ...] */
@@ -887,7 +898,7 @@ bool f2fs_sanity_check_cluster(struct dnode_of_data *dn)
 		goto out;
 	}
 
-	for (i = 1; i < cluster_size; i++) {
+	for (i = 1, count = 1; i < cluster_size; i++, count++) {
 		block_t blkaddr = data_blkaddr(dn->inode, dn->node_page,
 							dn->ofs_in_node + i);
 
@@ -907,19 +918,40 @@ bool f2fs_sanity_check_cluster(struct dnode_of_data *dn)
 			goto out;
 		}
 	}
+
+/* H230109-2393 : f2fs: get rid of bug_on in __f2fs_cluster_blocks() to avoid kernel panic for corrupted files */
 	return false;
 out:
 	f2fs_warn(sbi, "access invalid cluster, ino:%lu, nid:%u, ofs_in_node:%u, reason:%s",
 			dn->inode->i_ino, dn->nid, dn->ofs_in_node, reason);
 	set_sbi_flag(sbi, SBI_NEED_FSCK);
 	return true;
+#else
+	return false;
+#endif
 }
 
-static int __f2fs_cluster_blocks(struct inode *inode,
-				unsigned int cluster_idx, bool compr)
+static int __f2fs_get_cluster_blocks(struct inode *inode,
+					struct dnode_of_data *dn)
+{
+	unsigned int cluster_size = F2FS_I(inode)->i_cluster_size;
+	int count, i;
+
+	for (i = 0, count = 0; i < cluster_size; i++) {
+		block_t blkaddr = data_blkaddr(dn->inode, dn->node_page,
+							dn->ofs_in_node + i);
+
+		if (__is_valid_data_blkaddr(blkaddr))
+			count++;
+	}
+
+	return count;
+}
+
+static int __f2fs_cluster_blocks(struct inode *inode, unsigned int cluster_idx,
+				enum cluster_check_type type)
 {
 	struct dnode_of_data dn;
-	unsigned int cluster_size = F2FS_I(inode)->i_cluster_size;
 	unsigned int start_idx = cluster_idx <<
 				F2FS_I(inode)->i_log_cluster_size;
 	int ret;
@@ -934,31 +966,16 @@ static int __f2fs_cluster_blocks(struct inode *inode,
 
 	if (f2fs_sanity_check_cluster(&dn)) {
 		ret = -EFSCORRUPTED;
-		f2fs_handle_error(F2FS_I_SB(inode), ERROR_CORRUPTED_CLUSTER);
 		goto fail;
 	}
 
 	if (dn.data_blkaddr == COMPRESS_ADDR) {
-		int i;
-
-		ret = 1;
-		for (i = 1; i < cluster_size; i++) {
-			block_t blkaddr;
-
-			blkaddr = data_blkaddr(dn.inode,
-					dn.node_page, dn.ofs_in_node + i);
-			if (compr) {
-				if (__is_valid_data_blkaddr(blkaddr))
-					ret++;
-			} else {
-				if (blkaddr != NULL_ADDR)
-					ret++;
-			}
-		}
-
-		f2fs_bug_on(F2FS_I_SB(inode),
-			!compr && ret != cluster_size &&
-			!is_inode_flag_set(inode, FI_COMPRESS_RELEASED));
+		if (type == CLUSTER_COMPR_BLKS)
+			ret = 1 + __f2fs_get_cluster_blocks(inode, &dn);
+		else if (type == CLUSTER_IS_COMPR)
+			ret = 1;
+	} else if (type == CLUSTER_RAW_BLKS) {
+		ret = __f2fs_get_cluster_blocks(inode, &dn);
 	}
 fail:
 	f2fs_put_dnode(&dn);
@@ -968,15 +985,33 @@ fail:
 /* return # of compressed blocks in compressed cluster */
 static int f2fs_compressed_blocks(struct compress_ctx *cc)
 {
-	return __f2fs_cluster_blocks(cc->inode, cc->cluster_idx, true);
+	return __f2fs_cluster_blocks(cc->inode, cc->cluster_idx,
+		CLUSTER_COMPR_BLKS);
 }
 
-/* return # of valid blocks in compressed cluster */
+/* return # of raw blocks in non-compressed cluster */
+static int f2fs_decompressed_blocks(struct inode *inode,
+				unsigned int cluster_idx)
+{
+	return __f2fs_cluster_blocks(inode, cluster_idx,
+		CLUSTER_RAW_BLKS);
+}
+
+/* return whether cluster is compressed one or not */
 int f2fs_is_compressed_cluster(struct inode *inode, pgoff_t index)
 {
 	return __f2fs_cluster_blocks(inode,
 		index >> F2FS_I(inode)->i_log_cluster_size,
-		false);
+		CLUSTER_IS_COMPR);
+}
+
+/* return whether cluster contains non raw blocks or not */
+bool f2fs_is_sparse_cluster(struct inode *inode, pgoff_t index)
+{
+	unsigned int cluster_idx = index >> F2FS_I(inode)->i_log_cluster_size;
+
+	return f2fs_decompressed_blocks(inode, cluster_idx) !=
+		F2FS_I(inode)->i_cluster_size;
 }
 
 static bool cluster_may_compress(struct compress_ctx *cc)
@@ -1389,6 +1424,8 @@ void f2fs_compress_write_end_io(struct bio *bio, struct page *page)
 	struct f2fs_sb_info *sbi = bio->bi_private;
 	struct compress_io_ctx *cic =
 			(struct compress_io_ctx *)page_private(page);
+	enum count_type type = WB_DATA_TYPE(page,
+				f2fs_is_compressed_page(page));
 	int i;
 
 	if (unlikely(bio->bi_status))
@@ -1396,7 +1433,7 @@ void f2fs_compress_write_end_io(struct bio *bio, struct page *page)
 
 	f2fs_compress_free_page(page);
 
-	dec_page_count(sbi, F2FS_WB_DATA);
+	dec_page_count(sbi, type);
 
 	if (atomic_dec_return(&cic->pending_pages))
 		return;
@@ -1412,12 +1449,14 @@ void f2fs_compress_write_end_io(struct bio *bio, struct page *page)
 }
 
 static int f2fs_write_raw_pages(struct compress_ctx *cc,
-					int *submitted,
+					int *submitted_p,
 					struct writeback_control *wbc,
 					enum iostat_type io_type)
 {
 	struct address_space *mapping = cc->inode->i_mapping;
-	int _submitted, compr_blocks, ret, i;
+	struct f2fs_sb_info *sbi = F2FS_M_SB(mapping);
+	int submitted, compr_blocks, i;
+	int ret = 0;
 
 	compr_blocks = f2fs_compressed_blocks(cc);
 
@@ -1431,6 +1470,10 @@ static int f2fs_write_raw_pages(struct compress_ctx *cc,
 
 	if (compr_blocks < 0)
 		return compr_blocks;
+
+	/* overwrite compressed cluster w/ normal cluster */
+	if (compr_blocks > 0)
+		f2fs_lock_op(sbi);
 
 	for (i = 0; i < cc->cluster_size; i++) {
 		if (!cc->rpages[i])
@@ -1456,7 +1499,7 @@ continue_unlock:
 		if (!clear_page_dirty_for_io(cc->rpages[i]))
 			goto continue_unlock;
 
-		ret = f2fs_write_single_data_page(cc->rpages[i], &_submitted,
+		ret = f2fs_write_single_data_page(cc->rpages[i], &submitted,
 						NULL, NULL, wbc, io_type,
 						compr_blocks, false);
 		if (ret) {
@@ -1464,26 +1507,29 @@ continue_unlock:
 				unlock_page(cc->rpages[i]);
 				ret = 0;
 			} else if (ret == -EAGAIN) {
+				ret = 0;
 				/*
 				 * for quota file, just redirty left pages to
 				 * avoid deadlock caused by cluster update race
 				 * from foreground operation.
 				 */
 				if (IS_NOQUOTA(cc->inode))
-					return 0;
-				ret = 0;
+					goto out;
 				f2fs_io_schedule_timeout(DEFAULT_IO_TIMEOUT);
 				goto retry_write;
 			}
-			return ret;
+			goto out;
 		}
 
-		*submitted += _submitted;
+		*submitted_p += submitted;
 	}
 
-	f2fs_balance_fs(F2FS_M_SB(mapping), true);
+out:
+	if (compr_blocks > 0)
+		f2fs_unlock_op(sbi);
 
-	return 0;
+	f2fs_balance_fs(sbi, true);
+	return ret;
 }
 
 int f2fs_write_multi_pages(struct compress_ctx *cc,

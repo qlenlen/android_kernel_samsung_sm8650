@@ -1967,7 +1967,7 @@ int smb2_tree_connect(struct ksmbd_work *work)
 	ksmbd_debug(SMB, "tree connect request for tree %s treename %s\n",
 		    name, treename);
 
-	status = ksmbd_tree_conn_connect(conn, sess, name);
+	status = ksmbd_tree_conn_connect(work, name);
 	if (status.ret == KSMBD_TREE_CONN_STATUS_OK)
 		rsp->hdr.Id.SyncId.TreeId = cpu_to_le32(status.tree_conn->id);
 	else
@@ -2987,6 +2987,12 @@ int smb2_open(struct ksmbd_work *work)
 			rc = -EACCES;
 			goto err_out;
 		}
+	}
+
+	if (req->CreateOptions & FILE_DIRECTORY_FILE_LE ||
+			(file_present && S_ISDIR(d_inode(path.dentry)->i_mode))) {
+		open_flags &= ~O_ACCMODE;
+		may_flags &= ~MAY_WRITE;
 	}
 
 	/*create file if not present */
@@ -5301,6 +5307,10 @@ int smb2_query_info(struct ksmbd_work *work)
 	WORK_BUFFERS(work, req, rsp);
 
 	ksmbd_debug(SMB, "GOT query info request\n");
+	if (ksmbd_override_fsids(work)) {
+		rc = -ENOMEM;
+		goto err_out;
+	}
 
 	switch (req->InfoType) {
 	case SMB2_O_INFO_FILE:
@@ -5320,6 +5330,7 @@ int smb2_query_info(struct ksmbd_work *work)
 			    req->InfoType);
 		rc = -EOPNOTSUPP;
 	}
+	ksmbd_revert_fsids(work);
 
 	if (!rc) {
 		rsp->StructureSize = cpu_to_le16(9);
@@ -5329,6 +5340,7 @@ int smb2_query_info(struct ksmbd_work *work)
 					le32_to_cpu(rsp->OutputBufferLength));
 	}
 
+	err_out:
 	if (rc < 0) {
 		if (rc == -EACCES)
 			rsp->hdr.Status = STATUS_ACCESS_DENIED;

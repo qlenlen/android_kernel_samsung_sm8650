@@ -31,6 +31,13 @@ static void show_val_kb(struct seq_file *m, const char *s, unsigned long num)
 	seq_write(m, " kB\n", 4);
 }
 
+atomic_long_t nr_gpage_shmem = ATOMIC_LONG_INIT(0);
+atomic_long_t nr_gpage_reclaimed = ATOMIC_LONG_INIT(0);
+
+#ifdef CONFIG_HUGEPAGE_POOL
+extern unsigned long total_hugepage_pool_pages(void);
+#endif
+
 static int meminfo_proc_show(struct seq_file *m, void *v)
 {
 	struct sysinfo i;
@@ -39,6 +46,7 @@ static int meminfo_proc_show(struct seq_file *m, void *v)
 	long available;
 	unsigned long pages[NR_LRU_LISTS];
 	unsigned long sreclaimable, sunreclaim;
+	unsigned long gpu_shmem, gpu_reclaimed;
 	int lru;
 
 	si_meminfo(&i);
@@ -48,6 +56,10 @@ static int meminfo_proc_show(struct seq_file *m, void *v)
 	cached = global_node_page_state(NR_FILE_PAGES) -
 			total_swapcache_pages() - i.bufferram;
 	trace_android_vh_meminfo_cache_adjust(&cached);
+	gpu_shmem = gpu_page_shmem_pages();
+	gpu_reclaimed = gpu_page_reclaimed_pages();
+
+	cached -= gpu_shmem;
 	if (cached < 0)
 		cached = 0;
 
@@ -150,6 +162,9 @@ static int meminfo_proc_show(struct seq_file *m, void *v)
 		    global_node_page_state(NR_FILE_THPS));
 	show_val_kb(m, "FilePmdMapped:  ",
 		    global_node_page_state(NR_FILE_PMDMAPPED));
+#ifdef CONFIG_HUGEPAGE_POOL
+	show_val_kb(m, "HugepagePool:   ", total_hugepage_pool_pages());
+#endif
 #endif
 
 #ifdef CONFIG_CMA
@@ -158,6 +173,9 @@ static int meminfo_proc_show(struct seq_file *m, void *v)
 		    global_zone_page_state(NR_FREE_CMA_PAGES));
 #endif
 	trace_android_vh_meminfo_proc_show(m);
+	trace_android_rvh_meminfo_proc_show(m);
+	show_val_kb(m, "GpuSwap:        ", gpu_reclaimed);
+	show_val_kb(m, "KgslShmemUsage: ", gpu_shmem);
 
 	hugetlb_report_meminfo(m);
 
