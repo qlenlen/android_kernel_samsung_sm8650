@@ -85,7 +85,13 @@ static int __psci_enter_domain_idle_state(struct cpuidle_device *dev,
 	if (!state)
 		state = states[idx];
 
+	if (s2idle)
+		pr_err("cpu=%d suspend state=0x%x\n", dev->cpu, state);
+
 	ret = psci_cpu_suspend_enter(state) ? -1 : idx;
+
+	if (s2idle)
+		pr_err("cpu=%d resume\n", dev->cpu);
 
 	ct_irq_enter_irqson();
 	if (s2idle)

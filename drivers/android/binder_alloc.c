@@ -27,6 +27,10 @@
 #include "binder_trace.h"
 #include <trace/hooks/binder.h>
 
+#ifdef CONFIG_SAMSUNG_FREECESS
+#include <linux/freecess.h>
+#endif
+
 struct list_lru binder_alloc_lru;
 
 static DEFINE_MUTEX(binder_alloc_mmap_lock);
@@ -410,7 +414,9 @@ static struct binder_buffer *binder_alloc_new_buf_locked(
 	}
 
 	trace_android_vh_binder_alloc_new_buf_locked(size, &alloc->free_async_space, is_async);
-	trace_android_vh_binder_detect_low_async_space_locked(is_async, &alloc->free_async_space, pid, &should_fail);
+
+	trace_android_vh_binder_detect_low_async_space(is_async, &alloc->free_async_space, pid,
+			&should_fail);
 	if (should_fail) {
 		binder_alloc_debug(BINDER_DEBUG_BUFFER_ALLOC,
 				   "%d: binder_alloc_buf size %zd failed, not allowed to alloc more async space\n",
@@ -420,6 +426,19 @@ static struct binder_buffer *binder_alloc_new_buf_locked(
 
 	/* Pad 0-size buffers so they get assigned unique addresses */
 	size = max(size, sizeof(void *));
+
+#ifdef CONFIG_SAMSUNG_FREECESS
+	if (is_async && (alloc->free_async_space < 3*size
+		|| (alloc->free_async_space < alloc->buffer_size/4))) {
+		struct task_struct *p;
+
+		rcu_read_lock();
+		p = find_task_by_vpid(alloc->pid);
+		rcu_read_unlock();
+		if (p && (thread_group_is_frozen(p) || p->jobctl & JOBCTL_TRAP_FREEZE))
+			binder_report(p, -1, "free_buffer_full", is_async);
+	}
+#endif
 
 	if (is_async && alloc->free_async_space < size) {
 		binder_alloc_debug(BINDER_DEBUG_BUFFER_ALLOC,

@@ -429,6 +429,7 @@ void *__unflatten_device_tree(const void *blob,
 	pr_debug(" <- unflatten_device_tree()\n");
 	return mem;
 }
+EXPORT_SYMBOL_GPL(__unflatten_device_tree);
 
 static void *kernel_tree_alloc(u64 size, u64 align)
 {
@@ -615,6 +616,8 @@ static void __init fdt_reserve_elfcorehdr(void)
 	}
 
 	memblock_reserve(elfcorehdr_addr, elfcorehdr_size);
+	memblock_memsize_record("elfcorehdr", elfcorehdr_addr, elfcorehdr_size,
+				false, false);
 
 	pr_info("Reserving %llu KiB of memory at 0x%llx for elfcorehdr\n",
 		elfcorehdr_size >> 10, elfcorehdr_addr);
@@ -635,17 +638,21 @@ void __init early_init_fdt_scan_reserved_mem(void)
 	if (!initial_boot_params)
 		return;
 
+	memblock_memsize_disable_tracking();
+
 	/* Process header /memreserve/ fields */
 	for (n = 0; ; n++) {
 		fdt_get_mem_rsv(initial_boot_params, n, &base, &size);
 		if (!size)
 			break;
 		memblock_reserve(base, size);
+		memblock_memsize_record("memreserve", base, size, false, false);
 	}
 
 	fdt_scan_reserved_mem();
 	fdt_reserve_elfcorehdr();
 	fdt_init_reserved_mem();
+	memblock_memsize_enable_tracking();
 }
 
 /**
@@ -1318,11 +1325,16 @@ void __init early_init_dt_scan_nodes(void)
 	if (rc)
 		pr_warn("No chosen node found, continuing without\n");
 
+	memblock_memsize_disable_tracking();
+
 	/* Setup memory, calling early_init_dt_add_memory_arch */
 	early_init_dt_scan_memory();
 
 	/* Handle linux,usable-memory-range property */
 	early_init_dt_check_for_usable_mem_range();
+
+	memblock_memsize_enable_tracking();
+	memblock_memsize_detect_hole();
 }
 
 bool __init early_init_dt_scan(void *params)

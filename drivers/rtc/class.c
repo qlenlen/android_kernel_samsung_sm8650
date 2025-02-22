@@ -71,6 +71,12 @@ static void rtc_hctosys(struct rtc_device *rtc)
 		goto err_read;
 	}
 
+	/* SS : tm_year(years since 1900)
+	 * Force update rtc year time to 2023
+	 * (The release year of device)
+	 */
+	tm.tm_year = 123;
+
 	tv64.tv_sec = rtc_tm_to_time64(&tm);
 
 #if BITS_PER_LONG == 32
