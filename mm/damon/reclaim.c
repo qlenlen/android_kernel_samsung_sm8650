@@ -107,6 +107,16 @@ module_param(monitor_region_end, ulong, 0600);
 static int kdamond_pid __read_mostly = -1;
 module_param(kdamond_pid, int, 0400);
 
+/*
+ * Cpu affinity of the damon thread.
+ *
+ * set the cpu affinity of the damon thread
+ * from 0 - cpu_affinity. By default no cpu affinity will be set
+ */
+static unsigned long cpu_affinity __read_mostly;
+module_param(cpu_affinity, ulong, 0600);
+
+
 static struct damos_stat damon_reclaim_stat;
 DEFINE_DAMON_MODULES_DAMOS_STATS_PARAMS(damon_reclaim_stat,
 		reclaim_tried_regions, reclaimed_regions, quota_exceeds);
@@ -159,6 +169,28 @@ static int damon_reclaim_apply_parameters(void)
 					&monitor_region_end);
 }
 
+/*
+ * sets the cpu affinity for damon raclaimer thread to power cpu
+ */
+static void damon_set_cpu_affinity(int pid)
+{
+	struct cpumask mask;
+	int i = 0;
+	int rc = 0;
+
+	if (cpu_affinity == 0)
+		return;
+
+	cpumask_clear(&mask);
+
+	for (i = 0; i < cpu_affinity; i += 1)
+		cpumask_set_cpu(i, &mask);
+
+	rc = sched_setaffinity(pid, &mask);
+	if (rc != 0)
+		pr_err("error setting cpu affinity for damon pid (%d) error:%d\n", pid, rc);
+}
+
 static int damon_reclaim_turn(bool on)
 {
 	int err;
@@ -178,6 +210,7 @@ static int damon_reclaim_turn(bool on)
 	if (err)
 		return err;
 	kdamond_pid = ctx->kdamond->pid;
+	damon_set_cpu_affinity(kdamond_pid);
 	return 0;
 }
 

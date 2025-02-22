@@ -76,8 +76,11 @@ static void damon_pa_prepare_access_checks(struct damon_ctx *ctx)
 	struct damon_region *r;
 
 	damon_for_each_target(t, ctx) {
-		damon_for_each_region(r, t)
+		damon_for_each_region(r, t) {
+			if (kthread_should_stop())
+			break;
 			__damon_pa_prepare_access_check(r);
+		}
 	}
 }
 
@@ -194,6 +197,8 @@ static unsigned int damon_pa_check_accesses(struct damon_ctx *ctx)
 
 	damon_for_each_target(t, ctx) {
 		damon_for_each_region(r, t) {
+			if (kthread_should_stop())
+				break;
 			__damon_pa_check_access(r);
 			max_nr_accesses = max(r->nr_accesses, max_nr_accesses);
 		}

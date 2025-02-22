@@ -1225,10 +1225,19 @@ static int kdamond_fn(void *data)
 				ctx->callback.after_sampling(ctx))
 			break;
 
+		if (kthread_should_stop())
+			break;
+
 		kdamond_usleep(ctx->attrs.sample_interval);
+
+		if (kthread_should_stop())
+			break;
 
 		if (ctx->ops.check_accesses)
 			max_nr_accesses = ctx->ops.check_accesses(ctx);
+
+		if (kthread_should_stop())
+			break;
 
 		if (kdamond_aggregate_interval_passed(ctx)) {
 			kdamond_merge_regions(ctx,

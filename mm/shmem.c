@@ -741,6 +741,8 @@ static int shmem_add_to_page_cache(struct folio *folio,
 		mapping->nrpages += nr;
 		__lruvec_stat_mod_folio(folio, NR_FILE_PAGES, nr);
 		__lruvec_stat_mod_folio(folio, NR_SHMEM, nr);
+		if (is_gpu_folio(folio))
+			gpu_page_mod_shmem(nr);
 unlock:
 		xas_unlock_irq(&xas);
 	} while (xas_nomem(&xas, gfp));
@@ -768,6 +770,8 @@ static void shmem_delete_from_page_cache(struct folio *folio, void *radswap)
 
 	xa_lock_irq(&mapping->i_pages);
 	error = shmem_replace_entry(mapping, folio->index, folio, radswap);
+	if (is_gpu_folio(folio))
+		gpu_page_mod_shmem(-nr);
 	folio->mapping = NULL;
 	mapping->nrpages -= nr;
 	__lruvec_stat_mod_folio(folio, NR_FILE_PAGES, -nr);
@@ -1058,6 +1062,8 @@ whole_folios:
 
 	spin_lock_irq(&info->lock);
 	info->swapped -= nr_swaps_freed;
+	if (is_gpu_mapping(mapping))
+		gpu_page_mod_reclaimed(-nr_swaps_freed);
 	shmem_recalc_inode(inode);
 	spin_unlock_irq(&info->lock);
 }
@@ -1447,6 +1453,8 @@ static int shmem_writepage(struct page *page, struct writeback_control *wbc)
 		spin_lock_irq(&info->lock);
 		shmem_recalc_inode(inode);
 		info->swapped++;
+		if (is_gpu_folio(folio))
+			gpu_page_mod_reclaimed(1);
 		spin_unlock_irq(&info->lock);
 
 		swap_shmem_alloc(swap);
@@ -1824,6 +1832,8 @@ static int shmem_swapin_folio(struct inode *inode, pgoff_t index,
 
 	spin_lock_irq(&info->lock);
 	info->swapped--;
+	if (is_gpu_folio(folio))
+		gpu_page_mod_reclaimed(-1);
 	shmem_recalc_inode(inode);
 	spin_unlock_irq(&info->lock);
 
