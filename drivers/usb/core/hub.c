@@ -35,9 +35,15 @@
 #include <linux/bitfield.h>
 #include <linux/uaccess.h>
 #include <asm/byteorder.h>
+#if IS_ENABLED(CONFIG_USB_VENDOR_NOTIFY)
+#include <linux/usb_vendor_notify.h>
+#endif
 
 #include "hub.h"
 #include "otg_productlist.h"
+
+#undef dev_dbg
+#define dev_dbg dev_err
 
 #define USB_VENDOR_GENESYS_LOGIC		0x05e3
 #define USB_VENDOR_SMSC				0x0424
@@ -122,6 +128,7 @@ static int usb_reset_and_verify_device(struct usb_device *udev);
 static int hub_port_disable(struct usb_hub *hub, int port1, int set_state);
 static bool hub_port_warm_reset_required(struct usb_hub *hub, int port1,
 		u16 portstatus);
+static void hub_set_initial_usb2_lpm_policy(struct usb_device *udev);
 
 static inline char *portspeed(struct usb_hub *hub, int portstatus)
 {
@@ -2090,7 +2097,17 @@ void usb_set_device_state(struct usb_device *udev,
 {
 	unsigned long flags;
 	int wakeup = -1;
+	int is_certification = 0;
 
+	/*
+	 * If new_state is bigger than 100,
+	 * it is that lvs driver call this function for USB certification.
+	 */
+	if (new_state > 100) {
+		pr_info("lvs driver called for USB certification(%d)\n", new_state);
+		is_certification = 1;
+		new_state = new_state - 100;
+	}
 	spin_lock_irqsave(&device_state_lock, flags);
 	if (udev->state == USB_STATE_NOTATTACHED)
 		;	/* do nothing */
@@ -2118,7 +2135,14 @@ void usb_set_device_state(struct usb_device *udev,
 				udev->state != USB_STATE_SUSPENDED)
 			udev->active_duration += jiffies;
 		udev->state = new_state;
-		update_port_device_state(udev);
+		/*
+		 * When lvs driver calls this function,
+		 * update_port_device_state accesses hub device
+		 * and it cause NULL pointer dereference.
+		 * So, block to call update_port_device_state in USB certification case.
+		 */
+		if (!is_certification)
+			update_port_device_state(udev);
 	} else
 		recursively_mark_NOTATTACHED(udev);
 	spin_unlock_irqrestore(&device_state_lock, flags);
@@ -2472,6 +2496,11 @@ static int usb_enumerate_device(struct usb_device *udev)
 
 	usb_detect_interface_quirks(udev);
 
+#ifdef CONFIG_USB_INTERFACE_LPM_LIST
+	if (usb_detect_interface_lpm(udev))
+		hub_set_initial_usb2_lpm_policy(udev);
+#endif
+
 	return 0;
 }
 
@@ -2581,6 +2610,11 @@ int usb_new_device(struct usb_device *udev)
 	dev_dbg(&udev->dev, "udev %d, busnum %d, minor = %d\n",
 			udev->devnum, udev->bus->busnum,
 			(((udev->bus->busnum-1) * 128) + (udev->devnum-1)));
+#if IS_ENABLED(CONFIG_USB_VENDOR_NOTIFY)
+	err = send_usb_vendor_notify_new_device(udev);
+	if (err)
+		goto fail;
+#endif
 	/* export the usbdev device-node for libusb */
 	udev->dev.devt = MKDEV(USB_DEVICE_MAJOR,
 			(((udev->bus->busnum-1) * 128) + (udev->devnum-1)));
@@ -5160,7 +5194,9 @@ hub_port_init(struct usb_hub *hub, struct usb_device *udev, int port1,
 	/* notify HCD that we have a device connected and addressed */
 	if (hcd->driver->update_device)
 		hcd->driver->update_device(hcd, udev);
+#ifndef CONFIG_USB_INTERFACE_LPM_LIST
 	hub_set_initial_usb2_lpm_policy(udev);
+#endif
 fail:
 	if (retval) {
 		hub_port_disable(hub, port1, 0);

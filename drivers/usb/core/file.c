@@ -36,6 +36,9 @@ static int usb_open(struct inode *inode, struct file *file)
 	int err = -ENODEV;
 	const struct file_operations *new_fops;
 
+	if (iminor(inode) >= MAX_USB_MINORS)
+		return err;
+
 	down_read(&minor_rwsem);
 	new_fops = fops_get(usb_minors[iminor(inode)]);
 

@@ -2548,8 +2548,13 @@ static int dwc3_gadget_soft_disconnect(struct dwc3 *dwc)
 	int ret;
 
 	spin_lock_irqsave(&dwc->lock, flags);
-	dwc->connected = false;
+	if (!dwc->pullups_connected) {
+		spin_unlock_irqrestore(&dwc->lock, flags);
+		return 0;
+	}
 
+	dwc->connected = false;
+	dev_info(dwc->dev, "%s dwc->connected: %d\n", __func__, dwc->connected);
 	/*
 	 * Attempt to end pending SETUP status phase, and not wait for the
 	 * function to do so.
@@ -3876,7 +3881,7 @@ static void dwc3_gadget_disconnect_interrupt(struct dwc3 *dwc)
 	dwc3_gadget_dctl_write_safe(dwc, reg);
 
 	dwc->connected = false;
-
+	dev_info(dwc->dev, "%s dwc->connected: %d\n", __func__, dwc->connected);
 	dwc3_disconnect_gadget(dwc);
 
 	dwc->gadget->speed = USB_SPEED_UNKNOWN;
@@ -3884,6 +3889,13 @@ static void dwc3_gadget_disconnect_interrupt(struct dwc3 *dwc)
 	usb_gadget_set_state(dwc->gadget, USB_STATE_NOTATTACHED);
 
 	dwc3_ep0_reset_state(dwc);
+
+	/*
+	 * Request PM idle to address condition where usage count is
+	 * already decremented to zero, but waiting for the disconnect
+	 * interrupt to set dwc->connected to FALSE.
+	 */
+	pm_request_idle(dwc->dev);
 }
 
 static void dwc3_gadget_reset_interrupt(struct dwc3 *dwc)
@@ -3900,7 +3912,7 @@ static void dwc3_gadget_reset_interrupt(struct dwc3 *dwc)
 	 * transfers here, and avoid allowing of request queuing.
 	 */
 	dwc->connected = false;
-
+	dev_info(dwc->dev, "%s dwc->connected: %d\n", __func__, dwc->connected);
 	/*
 	 * WORKAROUND: DWC3 revisions <1.88a have an issue which
 	 * would cause a missing Disconnect Event if there's a
@@ -3949,7 +3961,7 @@ static void dwc3_gadget_reset_interrupt(struct dwc3 *dwc)
 	 */
 	dwc3_stop_active_transfers(dwc);
 	dwc->connected = true;
-
+	dev_info(dwc->dev, "%s dwc->connected: %d\n", __func__, dwc->connected);
 	reg = dwc3_readl(dwc->regs, DWC3_DCTL);
 	reg &= ~DWC3_DCTL_TSTCTRL_MASK;
 	dwc3_gadget_dctl_write_safe(dwc, reg);
